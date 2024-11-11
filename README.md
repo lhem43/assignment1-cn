@@ -9,5 +9,5 @@
     - Một hàm để kết nối 1 peer mới vào trong mạng (lưu thông tin vào txt)
     - Một hàm xoá 1 peer ra khỏi mạng (xoá thông tin khỏi txt)
 
-##hashing
+## hashing
     - Xài thư viện hashlib và encode sha256
