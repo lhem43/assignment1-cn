@@ -8,4 +8,6 @@
     - Một file txt để lưu trữ tất cả thông tin (ip, port, peer_id) của tất cả peer trong mạng
     - Một hàm để kết nối 1 peer mới vào trong mạng (lưu thông tin vào txt)
     - Một hàm xoá 1 peer ra khỏi mạng (xoá thông tin khỏi txt)
-    
+
+##hashing
+    - Xài thư viện hashlib và encode sha256
