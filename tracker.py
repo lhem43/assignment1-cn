@@ -6,6 +6,10 @@ import errno
 import os
 from threading import Thread
 
+
+#còn sửa theo bittorrent protocol (thông tin message và response)
+
+
 def write_to_file(filepath: str, data : str, size_of_file : int = 100000):
     with open(filepath, mode="w+", encoding="utf-8") as file_obj:
         file_obj.truncate(size_of_file)
@@ -72,9 +76,15 @@ class Tracker:
                   conn.close()
                   break
                elif fullmessage["message"] == "Send me a list of current peer":
-                  print("Helloworld")
+                  list_peer = read_file("tracker/list_peer.txt")
+                  list_peer_send = []
+                  for peer in list_peer:
+                     if peer["peer_id"] != hashlib.sha256(fullmessage["peer-id"].encode('utf-8')).hexdigest():
+                        list_peer_send.append(peer)
+                  conn.send(json.dumps(list_peer_send).encode("utf-8"))
                elif fullmessage["message"] == "Send me a list of files":
-                  
+                  list_file = read_file("tracker/magnet.txt")
+                  conn.send(json.dumps(list_file).encode("utf-8"))
                elif fullmessage["message"] == "Submit new file":
                   metadata = {
                      "ip" : self.host,
@@ -85,9 +95,11 @@ class Tracker:
                   }
                   self.add_file(metadata,fullmessage["peer-id"])
                elif fullmessage["message"] == "Request metainfo":
-                                 
-         except Exception:
-            print(Exception)
+                  metainfo = read_file(f"tracker/torrent/{hashlib.sha256(fullmessage["peer-id"].encode("utf-8")).hexdigest()}_{metadata['filename']}.torrent")
+                  conn.send(json.dumps(metainfo).encode("utf-8"))
+         except Exception as e:
+            print(e)
+            conn.close()
             break
          
    def add_peer(self,ip, port, id):
@@ -122,3 +134,19 @@ class Tracker:
             return False
    def add_file(metadata, peer_id):
       id_hash = hashlib.sha256(peer_id.encode('utf-8')).hexdigest()
+      try:
+         list_meta = read_file("tracker/magnet.txt")
+         list_meta.append({
+            "id" : f"{id_hash}_{metadata['filename']}.torrent",
+            "filename" : metadata["filename"]
+         })
+         write_to_file("tracker/magnet.txt",json.dumps(list_meta))
+      except OSError as e:
+         if e.errno == errno.ENOENT:
+            new_list_meta = json.dumps([{
+               "id" : f"{id_hash}_{metadata['filename']}.torrent",
+               "filename" : metadata["filename"]
+            }])
+            write_to_file("tracker/magnet.txt", new_list_meta)
+      create_sub_fold("tracker/torrent")
+      write_to_file("tracker/torrent/{id_hash}_{metadata['filename']}.torrent", json.dumps(metadata))
