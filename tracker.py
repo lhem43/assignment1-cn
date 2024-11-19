@@ -36,7 +36,7 @@ class Tracker:
       self.sock.bind((self.host, self.port))
       self.sock.listen(10)
    
-   def get_host_default_interface_ip():              
+   def get_host_default_interface_ip(self):              
       s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
       try:
          s.connect(('8.8.8.8',1))
