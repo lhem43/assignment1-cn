@@ -95,7 +95,7 @@ class Tracker:
                   }
                   self.add_file(metadata,fullmessage["peer-id"])
                elif fullmessage["message"] == "Request metainfo":
-                  metainfo = read_file(f"tracker/torrent/{hashlib.sha256(fullmessage["peer-id"].encode("utf-8")).hexdigest()}_{metadata['filename']}.torrent")
+                  metainfo = read_file(f"tracker/torrent/{hashlib.sha256(fullmessage['peer-id'].encode('utf-8')).hexdigest()}_{metadata['filename']}.torrent")
                   conn.send(json.dumps(metainfo).encode("utf-8"))
          except Exception as e:
             print(e)
