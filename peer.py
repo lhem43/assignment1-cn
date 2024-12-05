@@ -9,6 +9,35 @@ import mmap
 from threading import Thread, Lock
 from datetime import datetime
 import hashlib
+import urllib
+import urllib.parse
+
+#overall: đã xoá request metainfo và get list of current peer
+
+def decode_magnet(magnet_link : str): #lấy thông tin từ magnet
+    if not magnet_link.startswith("magnet:?"):
+        raise ValueError("Invalid magnet link format")
+    query = magnet_link[8:]
+    params = urllib.parse.parse_qs(query)
+    info_hash = params.get('xt', [None])[0]
+    if info_hash and info_hash.startswith('urn:btih:'):
+        info_hash = info_hash[9:]
+    file_name = params.get('dn', [None])[0]
+    tracker = params.get('tr', [None])[0] #just 1 tracker in this version
+    return {
+        'info_hash': info_hash,
+        'file_name': file_name,
+        'tracker': tracker
+    }
+
+def generate_magnet_link(info_hash, file_name, tracker_ip, tracker_port): #tạo magnet
+    info_hash = f"urn:btih:{info_hash.lower()}"
+    magnet_link = f"magnet:?xt={info_hash}"
+    if file_name:
+        magnet_link += f"&dn={file_name}"
+    tracker_url = f"{tracker_ip}:{tracker_port}"
+    magnet_link += f"&tr={tracker_url}"
+    return magnet_link
 
 def myGenHash(data : str):
     enc_data = data.encode('utf-8')
@@ -60,12 +89,14 @@ class Node:
         self.add_subparse()
         self.my_parse = self.parser.parse_args()
         self.peer_host = self.get_host_default_interface_ip()
-        self.username = input("Enter your peer id: ")
+        self.username = myGenHash(self.peer_host + str(self.my_parse.peer_port))
         self.priv_lock = Lock()
-        flush_folder(f"files_{self.username}")
-        flush_folder(f"pieces_{self.username}")
+        #flush_folder(f"files_{self.username}")        đang tắt flush
+        #flush_folder(f"pieces_{self.username}")
         self.connect_tracker = socket.socket()
         self.connect_tracker.connect((self.my_parse.tracker_ip, self.my_parse.tracker_port))
+        create_sub_fold(f"peer_file/files_{self.username}")
+        create_sub_fold(f"peer_file/pieces_{self.username}")
     def add_subparse(self):
         self.parser.add_argument('--tracker-ip')
         self.parser.add_argument('--tracker-port', type=int)
@@ -268,46 +299,30 @@ class Node:
             new_message = json.dumps(message).encode('utf-8')
             time.sleep(1)
             self.connect_tracker.send(new_message)
-            while True:
-                resp = self.connect_tracker.recv(1024)
-                if resp:
-                    if resp == b"Invalid ID":
-                        print("Your peer ID has been duplicated. Try again!")
-                        self.username = input("Enter your peer id: ")
-                    else:
-                        checked = True
-                    break
-            if checked == True:
-                break
-    def get_list(self):
-        message = {
-            "peer-ip": self.peer_host,
-            "peer-port": self.my_parse.peer_port,
-            "peer-id": self.username,
-            "message": "Send me a list of current peer"
-        }
-        new_message = json.dumps(message).encode('utf-8')
-        time.sleep(1)
-        self.connect_tracker.send(new_message)
-        try:
-            while True:
-                cur_list = self.connect_tracker.recv(1024).decode('utf-8')
-                if cur_list:
-                    # print(cur_list)
-                    return json.loads(cur_list)
-        except socket.error as e:
-            if e.errno == errno.ECONNRESET:
-                print(e)
-                return None
-            else:
-                pass
+            self.connect_tracker.recv(1024).decode('utf-8')
+            #while True:
+            #    resp = self.connect_tracker.recv(1024)
+            #    if resp:
+            #        if resp == b"Invalid ID":
+            #            print("Your peer ID has been duplicated. Try again!")
+            #            self.username = input("Enter your peer id: ")
+            #        else:
+            #            checked = True
+            #            break
+            #if checked == True:
+            #    break
+            break
     def process_filename(self, raw_filename: str):
         return [item[::-1] for item in raw_filename[::-1].partition(".")]
-    def submit_info(self):
-        create_sub_fold(f"files_{self.username}")
+    def submit_info(self): 
+        #nhập tên file gửi thông tin cho tracker, trả về magnet link
+        #create_sub_fold(f"files_{self.username}")
+        directory = f"peer_file/files_{self.username}"
         filename = input("Enter your filename: ")
+        filepath = os.path.join(directory, filename)
+        info_hash = myGenHash(filename)
         try:
-            filesize = os.stat(filename).st_size
+            filesize = os.stat(filepath).st_size
         except OSError as e:
             if e.errno == errno.ENOENT:
                 filesize = 0
@@ -318,7 +333,9 @@ class Node:
                 "peer-ip": self.peer_host,
                 "peer-port": self.my_parse.peer_port,
                 "peer-id": self.username,
-                'filename': myGenHash(self.process_filename(filename)[2] + self.username + str(datetime.now())) + "." + self.process_filename(filename)[0],
+                #'filename': myGenHash(self.process_filename(filename)[2] + self.username + str(datetime.now())) + "." + self.process_filename(filename)[0],
+                'filename': filename,
+                'info_hash': info_hash,
                 'length': filesize,
                 'piece_length': 524288,
                 "message": "Submit new file"
@@ -326,33 +343,11 @@ class Node:
             new_message = json.dumps(message).encode('utf-8')
             time.sleep(1)
             self.connect_tracker.send(new_message)
-            shutil.copy(filename, f"files_{self.username}/{message['filename']}")
+            print(generate_magnet_link(info_hash,filename, self.my_parse.tracker_ip, self.my_parse.tracker_port))
+            #shutil.copy(filename, f"files_{self.username}/{message['filename']}")
             # shutil.move(filename, f"files_{self.username}/{message['filename']}.jpg")
         else:
             print("File not found")
-    def get_metainfo(self, filename):
-        message = {
-            "peer-ip": self.peer_host,
-            "peer-port": self.my_parse.peer_port,
-            "peer-id": self.username,
-            "filename": filename,
-            "message": "Request metainfo"
-        }
-        new_message = json.dumps(message).encode('utf-8')
-        time.sleep(1)
-        self.connect_tracker.send(new_message)
-        try:
-            while True:
-                cur_list = self.connect_tracker.recv(1024).decode('utf-8')
-                if cur_list:
-                    # print(cur_list)
-                    return json.loads(cur_list)
-        except socket.error as e:
-            if e.errno == errno.ECONNRESET:
-                print(e)
-                return None
-            else:
-                pass
     # def assemble_file(self, fileName, pieceCount, length):
     #     # with open(f"files_{self.username}/{fileName}", "wb+", encoding="utf-8") as file_obj:
     #     with open(f"files_{self.username}/{fileName}", "wb+") as file_obj:
@@ -397,66 +392,71 @@ class Node:
                         print(e)
         return True
     def download_file(self):
-        create_sub_fold(f"files_{self.username}")
-        create_sub_fold(f"pieces_{self.username}")
-        filename = input("Enter the file name that you want to download: ")
-        list_file = self.get_files()
-        checker = False
-        metainfo_filename = ''
-        for file in list_file:
-            if file["filename"] == filename:
-                checker = True
-                metainfo_filename = file["id"]
-                break
-        if checker == True:
-            list_peer = self.get_list()
-            tor_item = self.get_metainfo(metainfo_filename)
+        magnet_link = input("Enter magnet link: ")
+        decode_result = decode_magnet(magnet_link)
+        self.get_files(decode_result["info_hash"]) #trả về địa chỉ các peer đang chứa file
+        
+        #list_file = self.get_files()
+        #checker = False
+        #metainfo_filename = ''
+        #for file in list_file:
+        #    if file["filename"] == filename:
+        #        checker = True
+        #        metainfo_filename = file["id"]
+        #        break
+        #if checker == True:
+        #    list_peer = self.get_list()
+        #    tor_item = self.get_metainfo(metainfo_filename)
             # print(list_peer)
             # print(tor_item)
-            for i in range(tor_item['piece_count']):
-                if i == tor_item['piece_count'] - 1:
-                   sizePiece = tor_item["length"] - 524288 * i
-                else:
-                   sizePiece = 524288
-                for peer in list_peer:
-                   tcon = Thread(target=self.peer_connect, args=(peer["peer-ip"], peer["peer-port"], i, filename, tor_item["length"], sizePiece))
-                #    tcon.daemon = True
-                   tcon.start()
-            time.sleep(10)
-            if self.assemble_file(filename, tor_item["piece_count"], tor_item["length"]) == None:
-                try:
-                    os.remove(f"files_{self.username}/{filename}")
-                except OSError as e:
-                    if e.errno == errno.ENOENT:
-                        pass
-                    else:
-                        print(e)
-        else:
-            print("Filename not found")
-    def get_files(self):
+        #    for i in range(tor_item['piece_count']):
+        #        if i == tor_item['piece_count'] - 1:
+        #           sizePiece = tor_item["length"] - 524288 * i
+        #        else:
+        #           sizePiece = 524288
+        #        for peer in list_peer:
+        #           tcon = Thread(target=self.peer_connect, args=(peer["peer-ip"], peer["peer-port"], i, filename, tor_item["length"], sizePiece))
+        #        #    tcon.daemon = True
+        #           tcon.start()
+        #    time.sleep(10)
+        #    if self.assemble_file(filename, tor_item["piece_count"], tor_item["length"]) == None:
+        #        try:
+        #            os.remove(f"files_{self.username}/{filename}")
+        #        except OSError as e:
+        #            if e.errno == errno.ENOENT:
+        #                pass
+        #            else:
+        #                print(e)
+        #else:
+        #    print("Filename not found")
+    def get_files(self, info_hash):
+        # hàm con hỗ trợ lấy địa chỉ các peer
         message = {
             "peer-ip": self.peer_host,
             "peer-port": self.my_parse.peer_port,
             "peer-id": self.username,
-            "message": "Send me a list of files"
+            "info_hash": info_hash,
+            "message": "Send me a list of peers with file"
         }
         new_message = json.dumps(message).encode('utf-8')
         time.sleep(1)
         self.connect_tracker.send(new_message)
-        try:
-            while True:
-                cur_file = self.connect_tracker.recv(1024).decode('utf-8')
-                if cur_file:
-                    if "{" in cur_file:
-                        return json.loads(cur_file)
-                    else:
-                        return cur_file
-        except socket.error as e:
-            if e.errno == errno.ECONNRESET:
-                print(e)
-                return None
-            else:
-                pass
+        list_address = self.connect_tracker.recv(1024).decode('utf-8')
+        print(list_address)
+        #try:
+        #    while True:
+        #        cur_file = self.connect_tracker.recv(1024).decode('utf-8')
+        #        if cur_file:
+        #            if "{" in cur_file:
+        #                return json.loads(cur_file)
+        #            else:
+        #                return cur_file
+        #except socket.error as e:
+        #    if e.errno == errno.ECONNRESET:
+        #        print(e)
+        #       return None
+        #    else:
+        #        pass
     def run(self):
         self.contact_tracker()
         thread_server = Thread(target=self.thread_server, args=())
