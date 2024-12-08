@@ -6,12 +6,15 @@ import errno
 import os
 import shutil
 import mmap
+import sys
+# import pdb
+import traceback
 from threading import Thread, Lock
 from datetime import datetime
 import hashlib
 import urllib
 import urllib.parse
-
+# pdb.set_trace()
 #overall: đã xoá request metainfo và get list of current peer
 
 def decode_magnet(magnet_link : str): #lấy thông tin từ magnet
@@ -91,12 +94,13 @@ class Node:
         self.peer_host = self.get_host_default_interface_ip()
         self.username = myGenHash(self.peer_host + str(self.my_parse.peer_port))
         self.priv_lock = Lock()
-        #flush_folder(f"files_{self.username}")        đang tắt flush
+        # flush_folder("peer_file")
+        # flush_folder(f"files_{self.username}")        đang tắt flush
         #flush_folder(f"pieces_{self.username}")
         self.connect_tracker = socket.socket()
         self.connect_tracker.connect((self.my_parse.tracker_ip, self.my_parse.tracker_port))
-        create_sub_fold(f"peer_file/files_{self.username}")
-        create_sub_fold(f"peer_file/pieces_{self.username}")
+        # create_sub_fold(f"peer_file/files_{self.username}")
+        # create_sub_fold(f"peer_file/pieces_{self.username}")
     def add_subparse(self):
         self.parser.add_argument('--tracker-ip')
         self.parser.add_argument('--tracker-port', type=int)
@@ -134,13 +138,13 @@ class Node:
                         piece_content = b''
                         founded = False
                         try:
-                            completed_files = os.listdir(f"files_{self.username}")
+                            completed_files = os.listdir(f"peer_file/files_{self.username}")
                             for file in completed_files:
                                 if file == self.process_pieceName(piece_name)[0]:
                                     founded = True
                                     piece_index = int(self.process_pieceName(piece_name)[1])
                                     try:
-                                        piece_content = read_file(f"files_{self.username}/{file}", piece_index * 524288, data["length"])
+                                        piece_content = read_file(f"peer_file/files_{self.username}/{file}", piece_index * 524288, data["length"])
                                     except Exception as e:
                                         print(e)
                                         message = {
@@ -160,13 +164,13 @@ class Node:
                             break
                         if founded == False:
                             try:
-                                completed_files = os.listdir(f"pieces_{self.username}")
+                                completed_files = os.listdir(f"peer_file/pieces_{self.username}")
                                 for file in completed_files:
                                     if file == piece_name:
                                         founded = True
                                         piece_index = int(self.process_pieceName(piece_name)[1])
                                         try:
-                                            piece_content = read_file(f"pieces_{self.username}/{piece_name}", piece_index * 524288, data["length"])
+                                            piece_content = read_file(f"peer_file/pieces_{self.username}/{piece_name}", piece_index * 524288, data["length"])
                                         except Exception as e:
                                             print(e)
                                             message = {
@@ -201,7 +205,7 @@ class Node:
                             time.sleep(1)
                             conn.send(json.dumps(message).encode('utf-8'))
                             break
-    def peer_connect(self, ip, port, piece_index, filename, lengthFile ,piece_length = 524288):
+    def peer_connect(self, ip, port, piece_index, filename, desFileName ,piece_length = 524288):
         s = socket.socket()
         s.connect((ip, port))
         message = {
@@ -239,6 +243,8 @@ class Node:
         while True:
             # time.sleep(1)
             raw_data = s.recv(piece_length)
+            if not raw_data:
+                break
             try:
                 if "{" in raw_data.decode('utf-8'):
                     message = "{" + raw_data.decode('utf-8').partition("{")[2]
@@ -253,7 +259,7 @@ class Node:
             if raw_data:
                 with self.priv_lock:
                     try:
-                        filesize = os.stat(f"pieces_{self.username}/_part{piece_index}_{filename}").st_size
+                        filesize = os.stat(f"peer_file/pieces_{self.username}/_part{piece_index}_{desFileName}").st_size
                     except OSError as e:
                         if e.errno == errno.ENOENT:
                             filesize = 0
@@ -262,7 +268,7 @@ class Node:
                             s.close()
                     if filesize == 0:
                         # write_to_file(f"pieces_{self.username}/_part{piece_index}_{filename}", raw_data, piece_length)
-                        with open(f"pieces_{self.username}/_part{piece_index}_{filename}", mode="wb+") as file_obj:
+                        with open(f"peer_file/pieces_{self.username}/_part{piece_index}_{desFileName}", mode="wb+") as file_obj:
                             file_obj.truncate(piece_length)
                             with mmap.mmap(file_obj.fileno(), length=0, access=mmap.ACCESS_WRITE, offset=0) as mmap_obj:
                                 mmap_obj.write(raw_data)
@@ -277,7 +283,7 @@ class Node:
                     s.close()
                     # print("I am ready to terminate")
                 break
-    def get_host_default_interface_ip(self):              
+    def get_host_default_interface_ip(self):
       s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
       try:
          s.connect(('8.8.8.8',1))
@@ -299,30 +305,36 @@ class Node:
             new_message = json.dumps(message).encode('utf-8')
             time.sleep(1)
             self.connect_tracker.send(new_message)
-            self.connect_tracker.recv(1024).decode('utf-8')
-            #while True:
-            #    resp = self.connect_tracker.recv(1024)
-            #    if resp:
-            #        if resp == b"Invalid ID":
-            #            print("Your peer ID has been duplicated. Try again!")
-            #            self.username = input("Enter your peer id: ")
-            #        else:
-            #            checked = True
-            #            break
-            #if checked == True:
-            #    break
-            break
+            # self.connect_tracker.recv(1024).decode('utf-8')
+            while True:
+               resp = self.connect_tracker.recv(1024)
+               if resp:
+                    if resp == b"Invalid ID":
+                        print("Your port number is duplicated. Please choose another port!")
+                        self.my_parse.peer_port = int(input("Enter your new peer port: "))
+                        self.username = myGenHash(self.peer_host + str(self.my_parse.peer_port))
+                    #    self.username = input("Enter your peer id: ")
+                    else:
+                        checked = True
+                    break
+            if checked == True:
+               flush_folder(f"peer_file/files_{self.username}")
+               flush_folder(f"peer_file/pieces_{self.username}")
+               create_sub_fold(f"peer_file/files_{self.username}")
+               break
+            # break
     def process_filename(self, raw_filename: str):
         return [item[::-1] for item in raw_filename[::-1].partition(".")]
-    def submit_info(self): 
+    def submit_info(self):
         #nhập tên file gửi thông tin cho tracker, trả về magnet link
         #create_sub_fold(f"files_{self.username}")
         directory = f"peer_file/files_{self.username}"
         filename = input("Enter your filename: ")
         filepath = os.path.join(directory, filename)
-        info_hash = myGenHash(filename)
+        info_hash = myGenHash(filename + self.username + str(datetime.now())) + "." + self.process_filename(filename)[0]
         try:
             filesize = os.stat(filepath).st_size
+            # filesize = os.stat(filename).st_size
         except OSError as e:
             if e.errno == errno.ENOENT:
                 filesize = 0
@@ -334,7 +346,7 @@ class Node:
                 "peer-port": self.my_parse.peer_port,
                 "peer-id": self.username,
                 #'filename': myGenHash(self.process_filename(filename)[2] + self.username + str(datetime.now())) + "." + self.process_filename(filename)[0],
-                'filename': filename,
+                # 'filename': filename,
                 'info_hash': info_hash,
                 'length': filesize,
                 'piece_length': 524288,
@@ -344,7 +356,7 @@ class Node:
             time.sleep(1)
             self.connect_tracker.send(new_message)
             print(generate_magnet_link(info_hash,filename, self.my_parse.tracker_ip, self.my_parse.tracker_port))
-            #shutil.copy(filename, f"files_{self.username}/{message['filename']}")
+            # shutil.copy(filepath, directory + "/"  +info_hash)
             # shutil.move(filename, f"files_{self.username}/{message['filename']}.jpg")
         else:
             print("File not found")
@@ -373,7 +385,7 @@ class Node:
     #     return True
     def assemble_file(self, fileName, pieceCount, length):
         # with open(f"files_{self.username}/{fileName}", "wb+", encoding="utf-8") as file_obj:
-        with open(f"files_{self.username}/{fileName}", "wb+") as file_obj:
+        with open(f"peer_file/files_{self.username}/{fileName}", "wb+") as file_obj:
             file_obj.truncate(length)
             for i in range(pieceCount):
                     # with self.priv_lock:
@@ -382,7 +394,7 @@ class Node:
                     #     else:
                     #         sizePiece = 524288
                 try:
-                    with open(f"pieces_{self.username}/_part{i}_{fileName}", mode="rb") as file_obj_item:
+                    with open(f"peer_file/pieces_{self.username}/_part{i}_{fileName}", mode="rb") as file_obj_item:
                             file_obj.write(file_obj_item.read())
                 except OSError as e:
                     if e.errno == errno.ENOENT:
@@ -391,11 +403,38 @@ class Node:
                     else:
                         print(e)
         return True
-    def download_file(self):
-        magnet_link = input("Enter magnet link: ")
+    def download_file(self, magnet_link, cur_peer):
+        create_sub_fold(f"peer_file/pieces_{self.username}")
+        # magnet_link = input("Enter magnet link: ")
         decode_result = decode_magnet(magnet_link)
-        self.get_files(decode_result["info_hash"]) #trả về địa chỉ các peer đang chứa file
-        
+        author_file = self.get_files(decode_result["info_hash"]) #trả về địa chỉ các peer đang chứa file
+        if len(author_file) != 0:
+            tor_item = author_file[0]
+            for i in range(tor_item['piece_count']):
+                if i == tor_item['piece_count'] - 1:
+                    sizePiece = tor_item["file_size"] - tor_item["piece_length"] * i
+                else:
+                    sizePiece = tor_item["piece_length"]
+                for peer in cur_peer:
+                    if peer["peer-ip"] == tor_item["auth_ip"] and peer["peer-port"] == tor_item["auth_port"]:
+                        fileName = decode_result["file_name"]
+                    else:
+                        fileName = decode_result["info_hash"]
+                    tcon = Thread(target=self.peer_connect, args=(peer["peer-ip"], peer["peer-port"], i, fileName, decode_result["info_hash"], sizePiece))
+                    # tcon.daemon = True
+                    tcon.start()
+            time.sleep(10)
+            if self.assemble_file(decode_result["info_hash"], tor_item["piece_count"], tor_item["file_size"]) == None:
+                try:
+                    os.remove(f"peer_file/files_{self.username}/{decode_result['info_hash']}")
+                except OSError as e:
+                    if e.errno == errno.ENOENT:
+                        pass
+                    else:
+                        print(e)
+        else:
+            print("Filename not found")
+
         #list_file = self.get_files()
         #checker = False
         #metainfo_filename = ''
@@ -429,8 +468,30 @@ class Node:
         #                print(e)
         #else:
         #    print("Filename not found")
+    def get_list(self):
+        message = {
+            "peer-ip": self.peer_host,
+            "peer-port": self.my_parse.peer_port,
+            "peer-id": self.username,
+            "message": "Send me a list of current peer"
+        }
+        new_message = json.dumps(message).encode('utf-8')
+        time.sleep(1)
+        self.connect_tracker.send(new_message)
+        try:
+            while True:
+                cur_list = self.connect_tracker.recv(1024).decode('utf-8')
+                if cur_list:
+                    # print(cur_list)
+                    return json.loads(cur_list)
+        except socket.error as e:
+            if e.errno == errno.ECONNRESET:
+                print(e)
+                return None
+            else:
+                pass
     def get_files(self, info_hash):
-        # hàm con hỗ trợ lấy địa chỉ các peer
+        # hàm con hỗ trợ lấy địa chỉ các peer (all peer)
         message = {
             "peer-ip": self.peer_host,
             "peer-port": self.my_parse.peer_port,
@@ -442,19 +503,17 @@ class Node:
         time.sleep(1)
         self.connect_tracker.send(new_message)
         list_address = self.connect_tracker.recv(1024).decode('utf-8')
-        print(list_address)
-        #try:
-        #    while True:
-        #        cur_file = self.connect_tracker.recv(1024).decode('utf-8')
-        #        if cur_file:
-        #            if "{" in cur_file:
-        #                return json.loads(cur_file)
-        #            else:
-        #                return cur_file
-        #except socket.error as e:
+        return json.loads(list_address)
+        # try:
+        #     while True:
+        #         cur_list = self.connect_tracker.recv(1024).decode('utf-8')
+        #         if cur_list:
+        #             # print(cur_list)
+        #             return json.loads(cur_list)
+        # except socket.error as e:
         #    if e.errno == errno.ECONNRESET:
         #        print(e)
-        #       return None
+        #        return None
         #    else:
         #        pass
     def run(self):
@@ -464,14 +523,26 @@ class Node:
         thread_server.start()
         print(f"Peer server is running on {self.peer_host}:{self.my_parse.peer_port}")
         while True:
-            choice = int(input("Enter your choice:\n1. Get list of files.\n2. Submit info.\n3. Download file.\nOtherwise. Exit\n"))
+            choice = int(input("Enter your choice:\n1. Get list of peers.\n2. Submit info.\n3. Download file.\nOtherwise. Exit\n"))
             if choice == 1:
                 # self.get_list()
-                print(self.get_files())
+                print(self.get_list())
+                # Thread(target=self.get_list, args=()).start()
             elif choice == 2:
                 self.submit_info()
             elif choice == 3:
-                self.download_file()
+                # magnet_link = input("Enter magnet link: ")
+                num_magnet = int(input("Enter number of files you want to download: "))
+                magnet_link = []
+                for i in range(num_magnet):
+                    temp_link = input("Enter magnet link " + str(i+ 1) + ": ")
+                    magnet_link.append(temp_link)
+                # self.download_file()
+                cur_peer = self.get_list()
+                for i in range(num_magnet):
+                    # print(magnet_link[i])
+                    Thread(target=self.download_file, args=(magnet_link[i], cur_peer)).start()
+                    time.sleep(2)
             else:
                 break
         self.connect_tracker.close()

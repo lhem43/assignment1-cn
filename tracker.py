@@ -36,7 +36,7 @@ def read_file(filepath: str):
             raw_obj = mmap_obj.read()
             return json.loads(raw_obj.partition(b"\x00")[0])
 class Tracker:
-   def __init__(self, port = 1000):
+   def __init__(self, port = 22236):
       self.host = self.get_host_default_interface_ip()
       self.port = port
       self.sock = socket.socket() 
@@ -69,7 +69,7 @@ class Tracker:
       create_sub_fold("tracker")
       peer_format = peer.copy()
       peer_format.pop("message")
-      #peer_format["key"] = myGenHash(addr_to_string(addr))
+      peer_format["key"] = myGenHash(addr_to_string(addr))
       try:
          list_peer = read_file("tracker/list_peer.txt")
          list_peer.append(peer_format)
@@ -78,7 +78,7 @@ class Tracker:
       except OSError as e:
          if e.errno == errno.ENOENT:
             new_list_peer = json.dumps([peer_format])
-            print(new_list_peer.encode())
+            # print(new_list_peer.encode())
             write_to_file("tracker/list_peer.txt", new_list_peer)
    def ensure_unique_id(self, peer_name : str):
       try:
@@ -95,21 +95,22 @@ class Tracker:
       return True
    def add_file(self, metainfo, seeder): #lưu thông tin file vào json trong folder tracker
       try:
-         file_info = read_file(f"tracker/files/{metainfo["info_hash"]}.json")
-         if seeder not in file_info["seeder"]:
-            file_info["seeder"].append(seeder) #thêm các seeder vào
-            write_to_file(f"tracker/files/{metainfo["info_hash"]}.json", json.dumps(file_info))
-         else:
-            print("Seeder already saves.")
+         file_info = read_file(f"tracker/files/{metainfo['info_hash']}.json")
+         # if seeder not in file_info["seeder"]:
+         #    file_info["seeder"].append(seeder) #thêm các seeder vào
+         #    write_to_file(f"tracker/files/{metainfo["info_hash"]}.json", json.dumps(file_info))
+         # else:
+         print("Seeder already saves.")
       except OSError as e:
          if e.errno == errno.ENOENT:
             file_info = {
                "info_hash": metainfo["info_hash"],
                "piece_count": metainfo["piece_count"],
                "piece_length": metainfo["piece_length"],
+               "file_size": metainfo["length"],
                "seeder": [seeder]
             }
-            write_to_file(f"tracker/files/{metainfo["info_hash"]}.json", json.dumps(file_info))
+            write_to_file(f"tracker/files/{metainfo['info_hash']}.json", json.dumps(file_info))
    def delete_peer(self, addr):
       try:
          current_peer = read_file("tracker/list_peer.txt")
@@ -134,7 +135,7 @@ class Tracker:
                self.print_list_peer()
                conn.close()
                break
-            print(message)
+            # print(message)
             if "{" in message:
                message = "{" + message.partition("{")[2]
                data = json.loads(message)
@@ -155,26 +156,48 @@ class Tracker:
                            'piece_length': 524288,
                            'piece_count': data["length"] // 524288 if data["length"] % 524288 == 0 else data["length"] // 524288 + 1
                         }
+                        print(meta_info)
                         self.add_file(meta_info, data["peer-id"])
                      elif data["message"] == "Send me a list of peers with file":
-                        list_peer = self.getlist(data["info_hash"])
+                        list_peer = self.getlist(data["info_hash"], addr)
                         time.sleep(1)
                         conn.send(json.dumps(list_peer).encode('utf-8'))
+                     elif data["message"] == "Send me a list of current peer":
+                        cur_list = read_file("tracker/list_peer.txt")
+                        peer_raw_mess = []
+                        for peer in cur_list:
+                           if peer["key"] != myGenHash(addr_to_string(addr)):
+                              peer_raw_mess.append({
+                                 'peer-ip': peer["peer-ip"],
+                                 "peer-port":peer["peer-port"],
+                                 "peer-id": peer["peer-id"]
+                              })
+                        peer_mess = json.dumps(peer_raw_mess).encode('utf-8')
+                        time.sleep(1)
+                        conn.send(peer_mess)
          except Exception as e:
             print(e)
             conn.close()
             break
-   def getlist(self, info_hash): #hàm trả về địa chỉ các peer đang chia sẻ file theo info hash
+   def getlist(self, info_hash, addr_key): #hàm trả về địa chỉ các peer đang chia sẻ file theo info hash
       list_peer = []
       try:
          file_info = read_file(f"tracker/files/{info_hash}.json")
          peer_info = read_file("tracker/list_peer.txt")
          for peer_id in file_info["seeder"]:
             for peer in peer_info:
-               if peer["peer-id"] == peer_id:
-                  address = peer["peer-ip"] + ":" + str(peer["peer-port"])
-                  list_peer.append(address)
+               if peer["peer-id"] == peer_id and peer["key"] != myGenHash(addr_to_string(addr_key)):
+                  # address = peer["peer-ip"] + ":" + str(peer["peer-port"])
+                  list_peer.append({
+                     "auth_ip": peer["peer-ip"],
+                     "auth_port": peer["peer-port"],
+                     "piece_count": file_info["piece_count"],
+                     "piece_length": file_info["piece_length"],
+                     "file_size": file_info["file_size"],
+                  })
                   break
+            if len(list_peer) != 0:
+               break
       except OSError as e:
          if e.errno == errno.ENOENT:
             return []
